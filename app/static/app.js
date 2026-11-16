@@ -23,11 +23,18 @@ $("#themeToggle").addEventListener("click", () => {
 // ── Router ──────────────────────────────────────────────────────────────────
 const PAGES = { dashboard: "Dashboard", pipeline: "Pipeline", leads: "Leads", review: "Needs review", duplicates: "Duplicates", pipedrive: "Pipedrive", licheck: "LinkedIn check", gtm: "GTM report", written: "Written on Pipedrive", services: "Services" };
 // "#leads/rejected" opens the Leads page filtered to that status (dashboard tiles link here).
-let _statusFilter = "all";
+// "#leads/accepted?ae=Rahul&from=…&to=…" lists the leads behind one AE Workload bar.
+let _statusFilter = "all", _aeF = null;
 function setPage(hash) {
-  let [p, sub] = String(hash || "").split("/");
+  const [path, query] = String(hash || "").split("?");
+  let [p, sub] = path.split("/");
   if (!PAGES[p]) p = "dashboard";
-  if (p === "leads") { const s = sub || "all"; if (s !== _statusFilter) { _statusFilter = s; if (typeof loadLeads === "function") loadLeads(); } }
+  if (p === "leads") {
+    const q = new URLSearchParams(query || ""), ae = q.get("ae");
+    const aeF = ae ? { ae, from: q.get("from") || "", to: q.get("to") || "" } : null;
+    const s = sub || "all";
+    if (s !== _statusFilter || JSON.stringify(aeF) !== JSON.stringify(_aeF)) { _statusFilter = s; _aeF = aeF; if (typeof loadLeads === "function") loadLeads(); }
+  }
   document.querySelectorAll(".page").forEach((s) => (s.hidden = s.dataset.page !== p));
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === p));
 }
@@ -183,14 +190,50 @@ $("#chanFilter").addEventListener("click", (e) => {
   loadLeads();
 });
 
+const _fmtDay = (d) => new Date(d + "T00:00").toLocaleDateString([], { day: "numeric", month: "short" });
 function renderStatusBar() {
   const el = $("#statusBar"); if (!el) return;
+  if (_aeF) {
+    const when = !_aeF.from ? `up to ${_fmtDay(_aeF.to)}` : _aeF.from === _aeF.to ? `on ${_fmtDay(_aeF.from)}` : `${_fmtDay(_aeF.from)} – ${_fmtDay(_aeF.to)}`;
+    el.hidden = false;
+    setHTML(el, `Showing: accepted leads assigned to <b>${esc(_aeF.ae)}</b> ${when} <a href="#leads/accepted" class="sb-clear" title="Show all accepted leads">✕ clear AE filter</a>`);
+    return;
+  }
   el.hidden = _statusFilter === "all";
   setHTML(el, _statusFilter === "all" ? "" : `Showing: <b>${esc(_statusFilter)}</b> leads <a href="#leads" class="sb-clear" title="Show all statuses">✕ show all</a>`);
 }
 
+// AE view (from an AE Workload bar): that AE's accepted leads assigned in the
+// bar's period — the same rule the chart counts by, so the numbers match.
+const _LEAD_HEAD = `<tr><th>#</th><th>Name</th><th>Channel</th><th>Status</th><th>Top match</th><th>Fit</th><th>AE</th><th></th></tr>`;
+const _AE_HEAD = `<tr><th>#</th><th>Name</th><th>Email</th><th>Phone</th><th>LinkedIn</th><th>Channel</th><th>Visa</th><th>Assigned</th><th>Fit</th><th>Pipedrive deal</th><th></th></tr>`;
+function _aeMatches(l) {
+  if (l.status !== "accepted" || l.owner !== _aeF.ae || !l.assigned_at) return false;
+  const d = _tsDay(l.assigned_at); return (!_aeF.from || d >= _aeF.from) && (!_aeF.to || d <= _aeF.to);
+}
+function _linkedinOf(l) { const u = (l.chosen || {}).url || ""; return u.includes("linkedin.com") ? u : (l.linkedin || ""); }
+function renderAeRows(shown, domain) {
+  const tb = $("#leadRows");
+  $("#leadShown").textContent = `${shown.length} lead${shown.length === 1 ? "" : "s"} · by date assigned`;
+  if (!shown.length) { setHTML(tb, `<tr><td colspan="11" class="empty">No accepted leads assigned to ${esc(_aeF.ae)} in this period${_chanFilter === "all" ? "" : " on this channel"}.</td></tr>`); return; }
+  const link = (u, t) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>` : '<span class="sub">—</span>';
+  const rows = [...shown].sort((a, b) => b.assigned_at - a.assigned_at).map((l) => { const li = _linkedinOf(l); return `<tr>
+    <td class="sub">${l.id}</td>
+    <td class="name-cell">${esc(l.name || "—")}</td>
+    <td>${l.email ? link("mailto:" + l.email, l.email) : '<span class="sub">—</span>'}</td>
+    <td>${l.phone ? esc(l.phone) : '<span class="sub">—</span>'}</td>
+    <td>${link(li, li ? prettyUrl(li) : "")}</td>
+    <td>${l.channel ? `<span class="chip">${esc(l.channel)}</span>` : '<span class="sub">—</span>'}</td>
+    <td>${l.visa ? esc(l.visa) : '<span class="sub">—</span>'}</td>
+    <td class="sub">${new Date(l.assigned_at * 1000).toLocaleDateString([], { day: "numeric", month: "short" })}</td>
+    <td>${tierChip(l.screening)}</td>
+    <td>${l.deal_id && domain ? link(`https://${domain}.pipedrive.com/deal/${l.deal_id}`, `Deal #${l.deal_id} ↗`) : '<span class="sub" title="Not written to Pipedrive yet">not in Pipedrive yet</span>'}</td>
+    <td><button class="link-btn" data-open="${l.id}">Details ▸</button></td></tr>`; }).join("");
+  if (setHTML(tb, rows)) wireRowButtons(tb);
+}
+
 async function loadLeads() {
-  const { leads } = await (await fetch("/api/leads?status=all")).json();
+  const { leads, pd_domain } = await (await fetch("/api/leads?status=all")).json();
   // A reviewer-triggered re-screen runs outside the queue; keep polling until it lands.
   _rescreening = leads.some((l) => l.screening && l.screening.note === "Screening this LinkedIn profile…");
   if (_rescreening) startPolling();
@@ -199,11 +242,16 @@ async function loadLeads() {
   _ownerById = Object.fromEntries(leads.map((x) => [x.id, x.owner]));
   const _dupTargets = new Set(leads.filter((x) => x.dup_of && x.status !== "duplicate").map((x) => x.dup_of));
   // Channel chips count what the status and date filters leave, so they match the table.
-  const base = leads.filter((l) => (_statusFilter === "all" || l.status === _statusFilter) && dayMatches(_leadDay(l), _leadF));
+  const base = leads.filter((l) => (_statusFilter === "all" || l.status === _statusFilter) && (_aeF ? _aeMatches(l) : dayMatches(_leadDay(l), _leadF)));
   renderChannelFilter(base);
   renderStatusBar();
   $("#leadStatus").value = _statusFilter;
   const shown = base.filter((l) => _chanFilter === "all" || (l.channel || "Not provided") === _chanFilter);
+  setHTML($("#leadHead"), _aeF ? _AE_HEAD : _LEAD_HEAD);
+  $("#leadRows").closest("table").classList.toggle("ae-view", !!_aeF);
+  // The bar's period sets the dates here, so the date picker doesn't apply.
+  $("#leadWhen").hidden = $("#leadDate").hidden = !!_aeF;
+  if (_aeF) { renderAeRows(shown, pd_domain); return; }
   $("#leadShown").textContent = `${shown.length} lead${shown.length === 1 ? "" : "s"}` + (_leadF.when === "all" ? "" : _statusFilter === "rejected" ? " · by date rejected" : " · by date it came in");
   if (!shown.length) { setHTML(tb, `<tr><td colspan="8" class="empty">No ${_statusFilter === "all" ? "" : esc(_statusFilter) + " "}${_chanFilter === "all" ? "" : esc(_CHAN_LABEL[_chanFilter] || _chanFilter) + " "}leads${_leadF.when === "all" ? "" : " for this date"}.</td></tr>`); return; }
   if (setHTML(tb, shown.map((l) => `<tr>
@@ -217,7 +265,7 @@ async function loadLeads() {
     <td>${rowActions(l)}</td></tr>`).join(""))) wireRowButtons(tb);
 }
 wireDateFilter("#leadWhen", "#leadDate", _leadF, () => loadLeads());
-$("#leadStatus").addEventListener("change", (e) => { location.hash = e.target.value === "all" ? "leads" : `leads/${e.target.value}`; });
+$("#leadStatus").addEventListener("change", (e) => { _aeF = null; location.hash = e.target.value === "all" ? "leads" : `leads/${e.target.value}`; });
 async function loadReview() {
   const { leads } = await (await fetch("/api/leads?status=review")).json();
   $("#reviewCount").textContent = leads.length;
@@ -471,7 +519,18 @@ function drawAnalytics() {
   const barOf = (m) => { const k = Object.keys(m).sort((x, y) => m[y] - m[x]); return _bar(k.length ? k : ["—"], k.length ? k.map((x) => m[x]) : [0]); };
   _draw("chChannels", barOf(_tally(_inRange("channels"), 1)));
   _draw("chTiers", barOf(_tally(_inRange("tiers"), 3)));
-  _draw("chOwners", barOf(_tally(_inRange("owners").filter((x) => x[2] === "accepted"), 4)));
+  const [oFrom, oTo] = _span(_range.owners);
+  const assigned = _anRows.filter((x) => { if (x[2] !== "accepted" || !x[5]) return false; const d = _tsDay(x[5]); return (!oFrom || d >= oFrom) && d <= oTo; });
+  const owners = barOf(_tally(assigned, 4));
+  owners.options.onClick = (_e, els, chart) => {
+    const ae = els.length && chart.data.labels[els[0].index];
+    if (!ae || ae === "—") return;
+    const [from, to] = _span(_range.owners);
+    _chanFilter = "all"; try { localStorage.setItem("ls-chan", "all"); } catch {}   // show every lead in the bar
+    location.hash = `leads/accepted?${new URLSearchParams({ ae, from: from || "", to })}`;
+  };
+  owners.options.onHover = (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; };
+  _draw("chOwners", owners);
   // Leads over time: every day in the period, zero days included.
   const tr = _inRange("time"), perDay = _tally(tr, 0);
   const [from, to] = _span(_range.time), first = from || Object.keys(perDay).sort()[0] || to;

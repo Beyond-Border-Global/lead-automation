@@ -334,6 +334,9 @@ table.leads { width: 100%; border-collapse: collapse; }
 .status-bar { font-size: 12.5px; color: var(--muted); margin: -4px 0 10px; display: flex; gap: 10px; align-items: center; }
 .status-bar b { color: var(--text); text-transform: capitalize; }
 .status-bar .sb-clear { color: var(--accent); font-weight: 600; }
+/* AE view (from an AE Workload bar): contact columns stay on one line; the panel scrolls sideways */
+.panel.view:has(table.ae-view) { overflow-x: auto; }
+table.leads.ae-view td { white-space: nowrap; }
 
 /* Pipedrive sync preview */
 .pd-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }

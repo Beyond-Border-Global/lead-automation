@@ -1489,10 +1489,23 @@ def _slim(l: dict) -> dict:
     return out
 
 
+def _deal_ids() -> dict[str, int]:
+    """Pipedrive deal per lead contact, keyed like Write on Pipe keys its sheet rows
+    (email, else "phone:<digits>"), so a lead finds its deal without asking Pipedrive."""
+    return {k: v["deal_id"] for k, v in pipedrive._links().items()
+            if isinstance(v, dict) and v.get("deal_id")}
+
+
 @app.get("/api/leads")
 def leads(status: str = "all", full: bool = False) -> JSONResponse:
     rows = db.list_leads(status)
-    return JSONResponse({"leads": rows if full else [_slim(l) for l in rows]})
+    deals = _deal_ids()
+    out = rows if full else [_slim(l) for l in rows]
+    for l in out:
+        email = (l.get("email") or "").strip().lower()
+        phone = re.sub(r"\D", "", l.get("phone") or "")
+        l["deal_id"] = deals.get(email) if email else deals.get("phone:" + phone) if phone else None
+    return JSONResponse({"leads": out, "pd_domain": config.PIPEDRIVE_DOMAIN})
 
 
 @app.get("/api/leads/{lead_id}")

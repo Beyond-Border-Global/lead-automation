@@ -1,6 +1,7 @@
 """Tiny SQLite persistence layer. JSON blobs are stored as TEXT."""
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import sqlite3
 import threading
@@ -64,6 +65,7 @@ _COLUMNS = {
     "created_at": "REAL",
     "updated_at": "REAL",
     "rejected_at": "REAL",         # when a reviewer rejected it (Leads page date filter)
+    "assigned_at": "REAL",         # when the current AE (owner) was given the lead
     "agent_note": "TEXT",          # JSON: the review agent's suggestion for the reviewer
 }
 
@@ -82,6 +84,15 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {simple}")
         # Leads rejected before rejected_at existed: nothing updates them after that.
         conn.execute("UPDATE leads SET rejected_at = updated_at WHERE status = 'rejected' AND rejected_at IS NULL")
+        # Leads given an AE before assigned_at existed: date them by the lead's own
+        # day (what the AE Workload chart used then), at noon UTC so the browser's
+        # local day is the same one anywhere from UTC-11 to UTC+11.
+        old = conn.execute("SELECT id, lead_date, created_at FROM leads "
+                           "WHERE owner IS NOT NULL AND owner != '' AND assigned_at IS NULL").fetchall()
+        for r in old:
+            d = _lead_day(r)
+            noon = _dt.datetime(d.year, d.month, d.day, 12, tzinfo=_dt.timezone.utc).timestamp()
+            conn.execute("UPDATE leads SET assigned_at = ? WHERE id = ?", (noon, r["id"]))
         # Small key/value table for round-robin counters etc.
         conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
         # Dedup store: keys of source rows we've already ingested (or baselined).
@@ -176,34 +187,39 @@ def insert_lead(name: str, company: str, email: str, phone: str, message: str,
         return int(cur.lastrowid)
 
 
+def _lead_day(r) -> _dt.date:
+    """The lead's "Date of lead" (else the day LeadSearch picked it up)."""
+    from .gtm import _parse_date
+    picked = _dt.datetime.utcfromtimestamp(r["created_at"] or 0).date()
+    d = _parse_date(r["lead_date"] or "")
+    if d and d > picked + _dt.timedelta(days=1):       # day/month swapped in the source
+        try:
+            d = _dt.date(d.year, d.day, d.month)
+        except ValueError:
+            d = None
+        d = d if d and d <= picked + _dt.timedelta(days=1) else picked
+    return d or picked
+
+
 def analytics() -> dict:
     """One compact row per lead for the dashboard charts, which filter by period
-    in the browser: [day, channel, status, fit tier, owner]. `day` is the lead's
-    "Date of lead" (else the day LeadSearch picked it up). Merged duplicates are
-    left out — they're the same person as another lead."""
-    import datetime as _dt
-    from .gtm import _parse_date
+    in the browser: [day, channel, status, fit tier, owner, assigned_at]. `day` is
+    the lead's "Date of lead" (else the day LeadSearch picked it up); the AE
+    Workload chart uses assigned_at instead. Merged duplicates are left out —
+    they're the same person as another lead."""
     with _conn() as conn:
-        rows = conn.execute("SELECT channel, status, screening, owner, lead_date, created_at "
+        rows = conn.execute("SELECT channel, status, screening, owner, lead_date, created_at, assigned_at "
                             "FROM leads WHERE status != 'duplicate'").fetchall()
     out = []
     for r in rows:
-        picked = _dt.datetime.utcfromtimestamp(r["created_at"] or 0).date()
-        d = _parse_date(r["lead_date"] or "")
-        if d and d > picked + _dt.timedelta(days=1):       # day/month swapped in the source
-            try:
-                d = _dt.date(d.year, d.day, d.month)
-            except ValueError:
-                d = None
-            d = d if d and d <= picked + _dt.timedelta(days=1) else picked
         tier = None
         if r["screening"]:
             try:
                 tier = (json.loads(r["screening"]) or {}).get("tier")
             except (json.JSONDecodeError, TypeError):
                 tier = None
-        out.append([(d or picked).isoformat(), r["channel"] or "Not provided", r["status"] or "?",
-                    tier or "", r["owner"] or ""])
+        out.append([_lead_day(r).isoformat(), r["channel"] or "Not provided", r["status"] or "?",
+                    tier or "", r["owner"] or "", r["assigned_at"]])
     return {"rows": out}
 
 
@@ -214,6 +230,14 @@ def update_lead(lead_id: int, **fields: Any) -> None:
         if jf in fields and not isinstance(fields[jf], (str, type(None))):
             fields[jf] = json.dumps(fields[jf], ensure_ascii=False)
     fields["updated_at"] = time.time()
+    if "owner" in fields and "assigned_at" not in fields:
+        if not fields["owner"]:
+            fields["assigned_at"] = None
+        else:
+            with _conn() as conn:
+                row = conn.execute("SELECT owner FROM leads WHERE id = ?", (lead_id,)).fetchone()
+            if not row or row["owner"] != fields["owner"]:     # a new AE: the clock starts now
+                fields["assigned_at"] = fields["updated_at"]
     cols = ", ".join(f"{k} = ?" for k in fields)
     vals = list(fields.values()) + [lead_id]
     with _lock, _conn() as conn:
