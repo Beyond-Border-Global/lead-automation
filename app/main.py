@@ -1795,10 +1795,14 @@ def services_cap(body: dict) -> JSONResponse:
 
 
 @app.post("/api/services/test-alert")
-def services_test_alert() -> JSONResponse:
-    """Send a test message to the Google Chat space."""
-    return JSONResponse({"delivered": notify.send(
-        "LeadSearch test alert: if you can read this, service alerts reach this space.")})
+def services_test_alert(body: dict | None = None) -> JSONResponse:
+    """Send a message to the Google Chat space by hand: a test, or with
+    {"kind": "all_clear"} an all-clear. Fixed texts only (no free text from an
+    open endpoint). Goes out even while automatic alerts are muted."""
+    text = {"all_clear": "✅ LeadSearch: all good now, fixed. The Render server is fixed too."}.get(
+        (body or {}).get("kind"),
+        "LeadSearch test alert: if you can read this, service alerts reach this space.")
+    return JSONResponse({"delivered": notify.send(text, force=True)})
 
 
 @app.get("/api/aes/turns")

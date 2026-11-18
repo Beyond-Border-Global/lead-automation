@@ -14,9 +14,11 @@ def channels() -> dict:
     return {"google_chat": bool(config.GCHAT_WEBHOOK_URL) and not config.MUTE_ALERTS}
 
 
-def send(text: str) -> dict:
-    """Post to the Chat space. Returns {"google_chat": "sent" | error}."""
-    if config.MUTE_ALERTS:
+def send(text: str, force: bool = False) -> dict:
+    """Post to the Chat space. Returns {"google_chat": "sent" | error}.
+    force=True: a message a person sent by hand (test / all-clear) goes out
+    even while automatic alerts are muted."""
+    if config.MUTE_ALERTS and not force:
         return {"google_chat": "muted (MUTE_ALERTS=true)"}
     if not config.GCHAT_WEBHOOK_URL:
         return {"none": "Google Chat isn't set up (GCHAT_WEBHOOK_URL)"}
