@@ -11,11 +11,13 @@ from . import config
 
 
 def channels() -> dict:
-    return {"google_chat": bool(config.GCHAT_WEBHOOK_URL)}
+    return {"google_chat": bool(config.GCHAT_WEBHOOK_URL) and not config.MUTE_ALERTS}
 
 
 def send(text: str) -> dict:
     """Post to the Chat space. Returns {"google_chat": "sent" | error}."""
+    if config.MUTE_ALERTS:
+        return {"google_chat": "muted (MUTE_ALERTS=true)"}
     if not config.GCHAT_WEBHOOK_URL:
         return {"none": "Google Chat isn't set up (GCHAT_WEBHOOK_URL)"}
     try:

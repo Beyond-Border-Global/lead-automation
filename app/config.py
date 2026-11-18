@@ -209,6 +209,9 @@ RENDER_MEMORY_MB = _get_int("RENDER_MEMORY_MB", 512)            # the instance's
 RENDER_MEMORY_ALERT_PCT = _get_float("RENDER_MEMORY_ALERT_PCT", 85)
 RENDER_API_KEY = _get("RENDER_API_KEY")                          # optional: latest deploy status
 GCHAT_WEBHOOK_URL = _get("GCHAT_WEBHOOK_URL")
+# Mute: while true, nothing is posted to Google Chat (checks still run and are
+# logged on the Services page; a problem still there is posted once unmuted).
+MUTE_ALERTS = _get("MUTE_ALERTS", "true").lower() not in ("0", "false", "no", "off")
 
 
 def provider_status() -> dict:

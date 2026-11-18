@@ -130,7 +130,7 @@ in production. [`.env.example`](.env.example) lists them with comments. The main
 | AEs | `AE_ROUND_ROBIN`, `AE_LATAM`, `AE_PILOT`, `AE_DIRECTORY` (name → Pipedrive user id) |
 | Automation | `SCHEDULER_ENABLED`, `SCHEDULER_INTERVAL_SECONDS` (600), `SCHEDULER_MAX_PER_CYCLE` (50), `AUTO_PIPE_TIMES`, `AUTO_PIPE_TZ` |
 | Tuning | `ACCEPT_THRESHOLD`, `REVIEW_THRESHOLD`, `MAX_RESULTS_PER_LEAD`, `MAX_CANDIDATES_MATCHED`, `MIN_CONTENT_CHARS` |
-| Alerts & status | `GCHAT_WEBHOOK_URL` (Google Chat), `RENDER_API_KEY` (deploy status) |
+| Alerts & status | `GCHAT_WEBHOOK_URL` (Google Chat), `MUTE_ALERTS` (**true by default**: nothing posted to Chat), `RENDER_API_KEY` (deploy status) |
 
 **Google Sheets access** uses a service account: share the source sheet with
 its email as *Viewer* and the destination and GTM sheets as *Editor*.
