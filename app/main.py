@@ -928,6 +928,14 @@ def _ingest_rows(rows: list[list[str]], dedup: bool = False,
         raise HTTPException(400, f"Could not map columns (LLM): {e}")
     data_rows = rows[1:] if mapping.get("has_header") else rows
     seen = db.seen_keys() if dedup else set()
+    # Sheet pulls skip rows dated before PULL_FROM_DATE (marked seen, never processed).
+    from_day = None
+    if dedup and config.PULL_FROM_DATE:
+        try:
+            from_day = dt.date.fromisoformat(config.PULL_FROM_DATE.strip())
+        except ValueError:
+            from_day = None
+    too_old = []
 
     # Pick the rows to insert first, so the link repair runs only on those.
     picked = []
@@ -945,6 +953,11 @@ def _ingest_rows(rows: list[list[str]], dedup: bool = False,
         if dedup and (chan_key in seen or key in seen or legacy in seen):
             continue
         seen.add(chan_key)
+        if from_day:
+            d = gtm.fix_date(val("date"), dt.date.today())
+            if d and d < from_day:
+                too_old.append(chan_key)
+                continue
         picked.append((val, chan_key))
         if limit and len(picked) >= limit:
             break
@@ -955,8 +968,8 @@ def _ingest_rows(rows: list[list[str]], dedup: bool = False,
         if _insert_row(val, channel=channel, link=links.get(i, ""), origin=origin):
             count += 1
             new_keys.append(key)
-    if new_keys:
-        db.mark_seen(new_keys)
+    if new_keys or too_old:
+        db.mark_seen(new_keys + too_old)
     return count, mapping
 
 

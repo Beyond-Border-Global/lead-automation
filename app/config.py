@@ -194,6 +194,12 @@ PIPEDRIVE_WRITE = _get("PIPEDRIVE_WRITE", "false").lower() in ("1", "true", "yes
 # any button, schedule or sync. Reads still work. On by default; set to false
 # only once the business has given the written go-ahead.
 HOLD_GTM_PIPEDRIVE = _get("HOLD_GTM_PIPEDRIVE", "true").lower() not in ("0", "false", "no", "off")
+# Hold for the lead (source) sheet: while true, the app never writes to it — no
+# "In Progress" marks, no cleaned values written back. Reads still work.
+HOLD_SOURCE_WRITES = _get("HOLD_SOURCE_WRITES", "true").lower() not in ("0", "false", "no", "off")
+# Pulls skip source rows dated before this day (YYYY-MM-DD): they are marked as
+# seen and never processed. Undated rows are still processed. Blank = no limit.
+PULL_FROM_DATE = _get("PULL_FROM_DATE", "2026-11-17")
 
 
 # Service health (health.py): how often to check credits and keys, and where
@@ -221,5 +227,7 @@ def provider_status() -> dict:
         "pipedrive": bool(PIPEDRIVE_API_TOKEN),
         "pipedrive_write": PIPEDRIVE_WRITE,
         "hold_gtm_pipedrive": HOLD_GTM_PIPEDRIVE,
+        "hold_source_writes": HOLD_SOURCE_WRITES,
+        "pull_from_date": PULL_FROM_DATE,
         "thresholds": {"accept": ACCEPT_THRESHOLD, "review": REVIEW_THRESHOLD},
     }

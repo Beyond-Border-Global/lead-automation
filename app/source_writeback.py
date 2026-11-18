@@ -79,7 +79,7 @@ def sync(channel_of, fields_of, live: bool = True) -> dict:
     """Write back every pushed lead's changed values. live=False only plans.
     Returns {"written": n, "rows": n, "plan": [...], "not_found": n}."""
     out = {"written": 0, "rows": 0, "not_found": 0, "plan": []}
-    if not config.GOOGLE_SOURCE_SHEET_ID:
+    if not config.GOOGLE_SOURCE_SHEET_ID or (live and config.HOLD_SOURCE_WRITES):
         return out
     state = _state()
     leads = [l for l in db.list_leads() if l.get("pushed") and l.get("origin") == "sheet"

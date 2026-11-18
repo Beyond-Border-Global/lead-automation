@@ -126,6 +126,7 @@ in production. [`.env.example`](.env.example) lists them with comments. The main
 | Google Sheets | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_SOURCE_SHEET_ID`/`_TAB`, `GOOGLE_DEST_SHEET_ID`/`_TAB`, `GTM_SHEET_ID`, `GTM_TAB` |
 | Pipedrive | `PIPEDRIVE_API_TOKEN`, `PIPEDRIVE_DOMAIN` (`bbg`), `PIPEDRIVE_PIPELINE`, `PIPEDRIVE_STAGE`, `PIPEDRIVE_WRITE` |
 | Write hold | `HOLD_GTM_PIPEDRIVE` — **true by default**: nothing is written to Pipedrive or the GTM sheet until it is set to `false` |
+| Source hold / cutoff | `HOLD_SOURCE_WRITES` (**true by default**: the lead sheet is never written) · `PULL_FROM_DATE` (pulls skip rows dated before it; default `2026-11-17`) |
 | AEs | `AE_ROUND_ROBIN`, `AE_LATAM`, `AE_PILOT`, `AE_DIRECTORY` (name → Pipedrive user id) |
 | Automation | `SCHEDULER_ENABLED`, `SCHEDULER_INTERVAL_SECONDS` (600), `SCHEDULER_MAX_PER_CYCLE` (50), `AUTO_PIPE_TIMES`, `AUTO_PIPE_TZ` |
 | Tuning | `ACCEPT_THRESHOLD`, `REVIEW_THRESHOLD`, `MAX_RESULTS_PER_LEAD`, `MAX_CANDIDATES_MATCHED`, `MIN_CONTENT_CHARS` |

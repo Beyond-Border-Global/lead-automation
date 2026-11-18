@@ -35,7 +35,7 @@ def _state() -> dict:
 def mark_distributed(channel_of) -> dict:
     """Mark every newly distributed lead's source row. Returns counts for the UI."""
     out = {"marked": 0, "skipped": 0}
-    if not config.GOOGLE_SOURCE_SHEET_ID:
+    if not config.GOOGLE_SOURCE_SHEET_ID or config.HOLD_SOURCE_WRITES:
         return out
     state = _state()
     # "ok" = handled by the row choice below. An older "done" gets one more look,
