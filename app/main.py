@@ -1642,12 +1642,29 @@ def _reject_lead(lead: dict, by: str = "reviewer") -> None:
                    reasoning=f"Manually rejected by {by}.", **fields)
 
 
+_side_tabs_last = 0.0
+_SIDE_TABS_MIN_GAP = 300          # seconds: the loop and every sync both call this
+
+
 def _sync_side_tabs() -> dict:
     """The Pipedrive sheet's Review / Rejected tabs (see side_tabs.py). Call
-    with _sync_lock held."""
-    return side_tabs.sync(_dest_fields, _hkey,
-                          accept=lambda l: _accept_lead(l, by="reviewer (sheet)"),
-                          reject=lambda l: _reject_lead(l, by="reviewer (sheet)"))
+    with _sync_lock held.
+
+    A rebuild reads three sheet tabs and every review / rejected lead in full,
+    which is heavy on the 512 MB server: it runs at most once per
+    _SIDE_TABS_MIN_GAP (the loop and the sync would otherwise both run it every
+    10 min), and the memory is handed back right after."""
+    global _side_tabs_last
+    if time.time() - _side_tabs_last < _SIDE_TABS_MIN_GAP:
+        return {"approved": 0, "rejected": 0, "review_rows": 0, "rejected_rows": 0,
+                "written": [], "skipped": "ran less than 5 min ago"}
+    _side_tabs_last = time.time()
+    try:
+        return side_tabs.sync(_dest_fields, _hkey,
+                              accept=lambda l: _accept_lead(l, by="reviewer (sheet)"),
+                              reject=lambda l: _reject_lead(l, by="reviewer (sheet)"))
+    finally:
+        _free_memory()
 
 
 def _side_tabs_loop() -> None:
