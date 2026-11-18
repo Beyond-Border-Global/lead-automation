@@ -1,5 +1,5 @@
 const $ = (s) => document.querySelector(s);
-let pollTimer = null, _rescreening = false, _aes = [];
+let pollTimer = null, _rescreening = false, _aes = [], _pipeHold = true;   // Pipe locked until the server says otherwise
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 // Only touch the DOM when the markup actually changed — the dashboard polls every
 // 2s while running, and blind re-renders make the page flicker and jump.
@@ -422,14 +422,17 @@ function renderAutomation(a) {
   const toggle = (target, paused) => paused
     ? `<button class="auto-btn" data-target="${target}" data-pause="0" title="Resume ${target}: runs now, then every ${min} min">▶ ${target === "pull" ? "Pull" : "Push"}</button>`
     : `<button class="auto-btn on" data-target="${target}" data-pause="1" title="Pause ${target}">⏸ ${target === "pull" ? "Pull" : "Push"}</button>`;
-  const pipe = a.pipe_paused
+  _pipeHold = !!a.pipe_hold; pdPicked();
+  const pipe = a.pipe_hold
+    ? `<button class="auto-btn locked" disabled title="Locked: Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE). No deals are created and the ${esc((a.pipe_times || []).join(" / "))} runs don't happen.">🔒 Pipe</button>`
+    : a.pipe_paused
     ? `<button class="auto-btn" data-target="pipe" data-pause="0" title="Every day at ${esc((a.pipe_times || []).join(" and "))}: push leads to the sheet and create the Pipedrive deals of the new ones (links/updates stay manual)">▶ Pipe</button>`
     : `<button class="auto-btn on" data-target="pipe" data-pause="1" title="Stop creating Pipedrive deals automatically">⏸ Pipe</button>`;
   const part = (label, paused) => `${label} <b class="${paused ? "st-off" : "st-on"}">${paused ? "paused" : "on"}</b>`;
   const title = both ? "<b>Automation paused</b>" : !a.paused && !a.push_paused ? "<b>Automation on</b>" : "<b>Automation partly on</b>";
   const when = both ? (a.running ? " · finishing the current cycle…" : "") : ` · every ${min} min · <span id="autoNext">${a.running ? "running now…" : ""}</span>`;
   setHTML(el, `${toggle("pull", a.paused)}${toggle("push", a.push_paused)}${pipe}<span class="auto-dot ${both ? "paused" : "on"}"></span>${title}${when}` +
-    `<span class="sub">${part("pull", a.paused)} · ${part("push to sheet", a.push_paused)}${a.push_paused ? " — use ↑ Push" : ""} · ${part("new deals to Pipedrive", a.pipe_paused)}${a.pipe_paused ? "" : ` at ${esc((a.pipe_times || []).join(" & "))} IST`}</span>` +
+    `<span class="sub">${part("pull", a.paused)} · ${part("push to sheet", a.push_paused)}${a.push_paused ? " — use ↑ Push" : ""} · ${a.pipe_hold ? `new deals to Pipedrive <b class="st-off">on hold</b>` : part("new deals to Pipedrive", a.pipe_paused)}${a.pipe_paused || a.pipe_hold ? "" : ` at ${esc((a.pipe_times || []).join(" & "))} IST`}</span>` +
     (a.pipe_last ? `<span class="sub">${esc(_pipeLastText(a.pipe_last))}</span>` : "") +
     `<span class="sub">${esc(_lastRunText(a.last))}</span>${disk}`);
   tickAutomation();
@@ -677,7 +680,8 @@ function pdRender(d) {
 }
 function pdPicked(shown, total) {
   const n = _pdSel.size, b = $("#pdWriteBtn");
-  b.disabled = !n; b.textContent = n ? `Write on Pipe (${n})` : "Write on Pipe";
+  b.disabled = !n || _pipeHold; b.textContent = _pipeHold ? "🔒 Write on Pipe (on hold)" : n ? `Write on Pipe (${n})` : "Write on Pipe";
+  b.title = _pipeHold ? "Locked: Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE)" : "";
   if (shown !== undefined) $("#pdShown").textContent = `Showing ${shown} of ${total}` + (n ? ` · ${n} selected` : "");
   else if (_pdPlan) $("#pdShown").textContent = $("#pdShown").textContent.replace(/ · \d+ selected$/, "") + (n ? ` · ${n} selected` : "");
 }

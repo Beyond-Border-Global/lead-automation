@@ -462,3 +462,6 @@ a.svc-pill:hover { border-color: var(--accent-2); background: var(--chip); }
 .rc-agent.reject { border-left-color: var(--bad); } .rc-agent.reject b { color: var(--bad); }
 .rc-agent.unsure { border-left-color: var(--warn); } .rc-agent.unsure b { color: var(--warn); }
 .rc-agent-k { text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px; color: var(--faint); }
+
+/* Pipe locked while Pipedrive writes are on hold */
+.auto-btn.locked, .auto-btn.locked:hover { opacity: .5; cursor: not-allowed; }

@@ -378,8 +378,8 @@ def _run_pipe(slot: float) -> dict:
 
 def _pipe_loop() -> None:
     while not _scheduler_stop.wait(60):
-        if pipedrive.auto_paused():
-            continue
+        if pipedrive.auto_paused() or config.HOLD_GTM_PIPEDRIVE:
+            continue                            # on hold: the 05:00 / 20:00 runs don't happen at all
         try:
             slot, _ = _pipe_slots(time.time())
             done = float(db.meta_get("pd_daily_last", "0") or 0)
@@ -449,6 +449,7 @@ def _automation_status() -> dict:
         "paused": _paused(),
         "push_paused": _push_paused(),
         "pipe_paused": pipedrive.auto_paused(),
+        "pipe_hold": config.HOLD_GTM_PIPEDRIVE,
         "pipe_times": config.AUTO_PIPE_TIMES,
         "pipe_next_in": round(_pipe_slots(time.time())[1] - time.time()),
         "pipe_last": _pipe_last(),
@@ -1448,6 +1449,8 @@ def automation_pause(body: dict) -> JSONResponse:
     if target not in ("pull", "push", "pipe"):
         raise HTTPException(400, "target must be 'pull', 'push' or 'pipe'")
     paused = bool(body.get("paused"))
+    if target == "pipe" and not paused and config.HOLD_GTM_PIPEDRIVE:
+        raise HTTPException(423, "Pipe is locked: Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE=true).")
     db.meta_set({"pull": "sched_paused", "push": "sched_push_paused", "pipe": "pd_auto_paused"}[target],
                 "1" if paused else "0")
     if target == "pipe":
