@@ -322,6 +322,9 @@ def recount(channel_of, weeks_back: int = 1, write: bool = True) -> dict:
     out = {"weeks": {}, "changed": 0, "skipped": []}
     if not config.GTM_SHEET_ID:
         return out
+    if write and config.HOLD_GTM_PIPEDRIVE:
+        out["skipped"].append("GTM report writes are on hold (HOLD_GTM_PIPEDRIVE=true)")
+        return out
     ws = sheets._client().open_by_key(config.GTM_SHEET_ID).worksheet(config.GTM_TAB)
     values = ws.get_all_values()
     formulas = ws.get_all_values(value_render_option="FORMULA")

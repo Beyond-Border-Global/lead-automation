@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import health, notify, server_status, config, db, dedupe, gtm, pipedrive, queue_review, review_agent, sheets, source_status, source_writeback
+from . import health, notify, server_status, config, db, dedupe, gtm, pipedrive, queue_review, review_agent, sheets, side_tabs, source_status, source_writeback
 from .pipeline import distribution, llm, orchestrator
 from .pipeline.linkedin import canonical_linkedin
 from .pipeline.urls import canonical_url
@@ -67,6 +67,8 @@ def _startup() -> None:
         db.meta_set("dedupe_scan_result", json.dumps(dedupe.scan_existing()))
         db.meta_set("dedupe_scanned", "1")
     _start_scheduler()
+    if config.GOOGLE_DEST_SHEET_ID and config.GOOGLE_SERVICE_ACCOUNT_JSON:
+        threading.Thread(target=_side_tabs_loop, daemon=True).start()
     server_status.record_start()
     if db.meta_get("svc_alerted_reset_v1") != "1":
         # Alerts noted before any channel existed never reached anyone: send them now.
@@ -412,9 +414,16 @@ def _locked_sync(add_new: bool = True) -> dict:
                 out["source_cleaned"] = cleaned
         except Exception as e:  # noqa: BLE001 — must not fail the push
             out["source_issue"] = f"Lead sheet not updated: {str(e)[:200]}"
+        # Review / Rejected tabs: every lead is in the sheet, not only on the dashboard.
+        try:
+            tabs = _sync_side_tabs()
+            if tabs["written"] or tabs["approved"] or tabs["rejected"]:
+                out["side_tabs"] = {k: tabs[k] for k in ("approved", "rejected", "review_rows", "rejected_rows")}
+        except Exception as e:  # noqa: BLE001 — must not fail the push
+            out["side_tabs_issue"] = f"Review/Rejected tabs not updated: {str(e)[:200]}"
         # A recount reads the whole lead sheet; several lead edits in a row must
         # not eat the Google Sheets read quota. The next cycle catches up.
-        if config.GTM_SHEET_ID and time.time() - _last_recount > 120:
+        if config.GTM_SHEET_ID and not config.HOLD_GTM_PIPEDRIVE and time.time() - _last_recount > 120:
             _last_recount = time.time()
             try:
                 rep = gtm.recount(_channel_from_tab)
@@ -1326,6 +1335,8 @@ def gtm_last() -> JSONResponse:
 @app.post("/api/gtm/recount")
 def gtm_recount() -> JSONResponse:
     """Recount this week and last week now (the automation does it every cycle)."""
+    if config.HOLD_GTM_PIPEDRIVE:
+        raise HTTPException(423, "GTM report writes are on hold (HOLD_GTM_PIPEDRIVE=true). Nothing was written.")
     if not config.GTM_SHEET_ID:
         raise HTTPException(400, "No GTM sheet configured (GTM_SHEET_ID).")
     try:
@@ -1372,6 +1383,8 @@ def pipedrive_sync(body: dict | None = None) -> JSONResponse:
     Pipedrive page ("Write on Pipe"). With no rows it syncs the whole sheet,
     which is refused unless PIPEDRIVE_WRITE=true."""
     only = (body or {}).get("rows")
+    if config.HOLD_GTM_PIPEDRIVE:
+        raise HTTPException(423, "Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE=true). Nothing was written.")
     if only is None and not config.PIPEDRIVE_WRITE:
         raise HTTPException(409, "Whole-sheet Pipedrive sync is off. Tick the leads to write instead.")
     if not _pd_lock.acquire(blocking=False):      # one write at a time: no double-clicked duplicate deals
@@ -1538,13 +1551,17 @@ def accept_as_is(lead_id: int) -> JSONResponse:
     lead = db.get_lead(lead_id)
     if not lead:
         raise HTTPException(404, "Lead not found")
+    _accept_lead(lead)
+    _sync_soon()
+    return JSONResponse({"ok": True})
+
+
+def _accept_lead(lead: dict, by: str = "reviewer") -> None:
     fields = {}
     if not lead.get("owner"):
         fields["owner"] = distribution.assign_owner(lead)
-    db.update_lead(lead_id, status="accepted",
-                   reasoning="Accepted by reviewer. " + (lead.get("reasoning") or ""), **fields)
-    _sync_soon()
-    return JSONResponse({"ok": True})
+    db.update_lead(lead["id"], status="accepted",
+                   reasoning=f"Accepted by {by}. " + (lead.get("reasoning") or ""), **fields)
 
 
 @app.post("/api/leads/{lead_id}/choose")
@@ -1595,14 +1612,43 @@ def reject(lead_id: int) -> JSONResponse:
     lead = db.get_lead(lead_id)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    fields = {}
-    if not lead.get("pushed"):
-        fields["owner"] = None             # never reached an AE: free the assignment
-    db.update_lead(lead_id, status="rejected", rejected_at=time.time(),
-                   reasoning="Manually rejected by reviewer.", **fields)
+    _reject_lead(lead)
     if lead.get("pushed"):
         _sync_soon()                       # its sheet row shows "rejected"
     return JSONResponse({"ok": True})
+
+
+def _reject_lead(lead: dict, by: str = "reviewer") -> None:
+    fields = {}
+    if not lead.get("pushed"):
+        fields["owner"] = None             # never reached an AE: free the assignment
+    db.update_lead(lead["id"], status="rejected", rejected_at=time.time(),
+                   reasoning=f"Manually rejected by {by}.", **fields)
+
+
+def _sync_side_tabs() -> dict:
+    """The Pipedrive sheet's Review / Rejected tabs (see side_tabs.py). Call
+    with _sync_lock held."""
+    return side_tabs.sync(_dest_fields, _hkey,
+                          accept=lambda l: _accept_lead(l, by="reviewer (sheet)"),
+                          reject=lambda l: _reject_lead(l, by="reviewer (sheet)"))
+
+
+def _side_tabs_loop() -> None:
+    """Every SCHEDULER_INTERVAL_SECONDS — even with automation paused, like the
+    dashboard's Review buttons — pick up the Review tab's decisions and refresh
+    both tabs. Decided leads then go through the normal sync, which follows the
+    Push switch for adding rows to Master leads."""
+    wait = 30                              # first run shortly after start (fills the tabs)
+    while not _scheduler_stop.wait(wait):
+        wait = config.SCHEDULER_INTERVAL_SECONDS
+        try:
+            with _sync_lock:
+                res = _sync_side_tabs()
+            if res["approved"] or res["rejected"]:
+                _sync_soon()
+        except Exception as e:  # noqa: BLE001 — keep the loop alive; try again next time
+            print(f"[side tabs] {e}")
 
 
 def _sheet_links() -> list[dict]:

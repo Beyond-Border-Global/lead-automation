@@ -89,6 +89,8 @@ class Client:
     def _write(self, method: str, path: str, payload: dict) -> dict:
         if not self.write:
             raise PipedriveError("Write blocked: dry run")
+        if config.HOLD_GTM_PIPEDRIVE:
+            raise PipedriveError("Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE=true)")
         return self._req(method, path, json=payload)
 
     def paged(self, path: str, **params) -> list[dict]:
@@ -207,6 +209,8 @@ def sync(live: bool = False, only: list[dict] | None = None, progress=None, note
     only = [{"row": n, "key": row key}, …] limits it to those rows (the ones
     ticked in the preview). The key must still match the row, so a sheet that
     changed since the preview can't make it write the wrong lead."""
+    if live and config.HOLD_GTM_PIPEDRIVE:
+        raise PipedriveError("Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE=true)")
     if live and only is None and not config.PIPEDRIVE_WRITE:
         raise PipedriveError("Whole-sheet sync is off: set PIPEDRIVE_WRITE=true first")
     if only is not None and not only:
@@ -374,6 +378,8 @@ def auto_paused() -> bool:
 def write_new() -> dict:
     """Preview the sheet, then write only the new deals. Returns
     {"created": n, "held": [names too old / undated], "errors": [..]}."""
+    if config.HOLD_GTM_PIPEDRIVE:
+        return {"created": 0, "held": [], "errors": ["Pipedrive writes are on hold (HOLD_GTM_PIPEDRIVE=true)"]}
     plan = sync(live=False)["plan"]
     cutoff = time.time() - AUTO_MAX_AGE_DAYS * 86400
     new, held = [], []

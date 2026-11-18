@@ -190,6 +190,10 @@ PIPEDRIVE_DOMAIN = _get("PIPEDRIVE_DOMAIN")          # "<company>" of <company>.
 PIPEDRIVE_PIPELINE = _get("PIPEDRIVE_PIPELINE", "Consulting and agencies")
 PIPEDRIVE_STAGE = _get("PIPEDRIVE_STAGE", "New Lead")
 PIPEDRIVE_WRITE = _get("PIPEDRIVE_WRITE", "false").lower() in ("1", "true", "yes")
+# Hold: while true, NOTHING is written to Pipedrive or the GTM report sheet — by
+# any button, schedule or sync. Reads still work. On by default; set to false
+# only once the business has given the written go-ahead.
+HOLD_GTM_PIPEDRIVE = _get("HOLD_GTM_PIPEDRIVE", "true").lower() not in ("0", "false", "no", "off")
 
 
 # Service health (health.py): how often to check credits and keys, and where
@@ -216,5 +220,6 @@ def provider_status() -> dict:
         "dest_sheet": bool(GOOGLE_DEST_SHEET_ID),
         "pipedrive": bool(PIPEDRIVE_API_TOKEN),
         "pipedrive_write": PIPEDRIVE_WRITE,
+        "hold_gtm_pipedrive": HOLD_GTM_PIPEDRIVE,
         "thresholds": {"accept": ACCEPT_THRESHOLD, "review": REVIEW_THRESHOLD},
     }
