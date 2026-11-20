@@ -45,6 +45,7 @@ _COLUMNS = {
     "prior_status": "TEXT",        # status before it was merged away (accepted / rejected / …)
     "merged_from": "TEXT",         # JSON list of lead ids merged into this one
     "visa": "TEXT",
+    "designation": "TEXT",         # job title as the lead typed it (e.g. the Meta form)
     "lead_date": "TEXT",
     "message": "TEXT",
     "status": "TEXT NOT NULL DEFAULT 'queued'",
@@ -173,16 +174,17 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 def insert_lead(name: str, company: str, email: str, phone: str, message: str,
                 linkedin: str = "", li_optout: int = 0, other_link: str = "",
                 link_raw: str = "", visa: str = "", lead_date: str = "", channel: str = "",
-                origin: str = "", heard_about: str = "") -> int:
+                origin: str = "", heard_about: str = "", designation: str = "") -> int:
     now = time.time()
     with _lock, _conn() as conn:
         cur = conn.execute(
             """INSERT INTO leads (name, company, channel, email, phone, linkedin,
                                   li_optout, other_link, link_raw, visa, lead_date,
-                                  message, origin, heard_about, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
+                                  message, origin, heard_about, designation, status,
+                                  created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
             (name, company, channel, email, phone, linkedin, li_optout, other_link,
-             link_raw, visa, lead_date, message, origin, heard_about, now, now),
+             link_raw, visa, lead_date, message, origin, heard_about, designation, now, now),
         )
         return int(cur.lastrowid)
 

@@ -216,7 +216,8 @@ EXTRACT_SYS = (
     "You are a data-extraction engine for a lead-enrichment pipeline. "
     "Given one raw lead row, extract and lightly enrich a structured profile. "
     "Infer location from phone country codes when possible. Pull role hints and "
-    "topical keywords from the free-text message. "
+    "topical keywords from the free-text message. When a Designation is given, "
+    "'role_guess' is that designation as typed (lightly cleaned). "
     "For 'company', use the employer name; infer it from the email domain when it "
     "is clearly a company domain (e.g. jane@acme.com -> Acme), but leave it EMPTY "
     "for generic providers (gmail, outlook, yahoo, icloud, etc). "
@@ -237,6 +238,7 @@ def extract_fields(lead: dict) -> dict:
         f"Raw lead:\n"
         f"- Name: {lead.get('name','')}\n"
         f"- Company: {lead.get('company','')}\n"
+        f"- Designation (job title they typed in): {lead.get('designation','')}\n"
         f"- Email: {lead.get('email','')}\n"
         f"- Phone: {lead.get('phone','')}\n"
         f"- Message: {lead.get('message','')}\n\n"
@@ -330,6 +332,64 @@ def match_candidate(extracted: dict, candidate: dict, content: str,
     except (TypeError, ValueError):
         out["score"] = 0.0
     return out
+
+
+# ── Guardrail: a LinkedIn found by search must show the lead's company + title ─
+WORK_SYS = (
+    "You are a strict guardrail in a lead-matching pipeline. A lead typed their "
+    "COMPANY and DESIGNATION (job title) into a form but gave no LinkedIn link. A "
+    "search then found a LinkedIn profile with the same or a similar name. Many "
+    "people share a name, so this profile may only be counted as the lead's if it "
+    "shows the SAME company AND the SAME designation the lead typed.\n"
+    "COMPANY matches when the profile's headline or any experience entry (current "
+    "or past) is at the same organization. Allow typos, casing, legal suffixes "
+    "(Inc, LLC, Ltd, Pvt), abbreviations and clearly-same names ('TCS' = 'Tata "
+    "Consultancy Services', 'Google' = 'Google LLC'). A different organization that "
+    "merely shares a word ('Apple Bank' vs 'Apple') is NOT a match.\n"
+    "DESIGNATION matches when the profile shows the same job (in the headline or an "
+    "experience entry), allowing abbreviations and wording ('CEO' = 'Chief "
+    "Executive Officer', 'Sr. Software Engineer' = 'Senior Software Engineer', "
+    "'Founder & CEO' includes 'CEO', 'Doctor' = 'Physician'). A different job or "
+    "field ('Marketing Manager' vs 'Software Engineer', 'Student' vs 'Director') "
+    "is NOT a match. A small seniority step in the same job ('Engineer' vs 'Senior "
+    "Engineer') still matches.\n"
+    "Judge only the fields the lead gave (a blank one is ignored).\n"
+    "verdict: \"match\" only when every given field is clearly shown on the profile; "
+    "\"mismatch\" when a given field is absent from a profile that lists its jobs, "
+    "or plainly different; \"unsure\" only when the profile shows almost nothing "
+    "(no headline and no experience). Respond ONLY with a JSON object."
+)
+
+
+def work_match(company: str, designation: str, profile: str) -> dict:
+    """Does this profile show the company + designation the lead typed in?
+    Returns {"verdict": "match"|"mismatch"|"unsure", "company": bool|None,
+    "designation": bool|None, "reason": str}."""
+    user = (
+        f"LEAD TYPED IN:\n- Company: {company or '(blank)'}\n"
+        f"- Designation: {designation or '(blank)'}\n\n"
+        f"LINKEDIN PROFILE FOUND BY SEARCH:\n{(profile or '')[:6000]}\n\n"
+        'Return JSON: {"company_match": true | false | null, "designation_match": '
+        'true | false | null, "verdict": "match" | "mismatch" | "unsure", '
+        '"reason": "one line naming what the profile shows"}. Use null for a field '
+        "the lead left blank."
+    )
+    out = chat_json(WORK_SYS, user, max_tokens=300)
+    if not isinstance(out, dict):
+        out = {}
+    v = str(out.get("verdict") or "").strip().lower()
+    cm, dm = out.get("company_match"), out.get("designation_match")
+    # Belt and braces: a given field the model marked as not matching is a
+    # mismatch whatever the verdict says.
+    if (company and cm is False) or (designation and dm is False):
+        v = "mismatch"
+    elif v == "match" and ((company and cm is not True) or (designation and dm is not True)):
+        v = "unsure"
+    if v not in ("match", "mismatch", "unsure"):
+        v = "unsure"
+    return {"verdict": v, "company": cm if isinstance(cm, bool) else None,
+            "designation": dm if isinstance(dm, bool) else None,
+            "reason": str(out.get("reason") or "")[:300]}
 
 
 # ── LinkedIn review: is the linked profile the lead? ─────────────────────────

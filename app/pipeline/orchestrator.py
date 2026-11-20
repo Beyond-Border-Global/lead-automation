@@ -93,7 +93,40 @@ def lead_context(lead: dict) -> dict:
     or anything else derived from the profile being checked."""
     return {"name": lead.get("name") or "", "email": lead.get("email") or "",
             "phone": lead.get("phone") or "", "company": lead.get("company") or "",
+            "designation": lead.get("designation") or "",
             "visa": lead.get("visa") or "", "message": (lead.get("message") or "")[:1500]}
+
+
+def stated_work(lead: dict) -> tuple[str, str]:
+    """(company, designation) as the lead typed them in; ('', '') if neither."""
+    return ((lead.get("company") or "").strip(), (lead.get("designation") or "").strip())
+
+
+def work_guard(lead: dict, profile_text: str) -> dict | None:
+    """GUARDRAIL for a LinkedIn profile the lead did NOT give us (found by search):
+    it must show the company AND designation the lead typed in, or it is not
+    theirs — a shared name proves nothing. None when the lead gave neither (no
+    guard to apply). A failed check is "unsure": it can't be auto-accepted."""
+    company, designation = stated_work(lead)
+    if not (company or designation):
+        return None
+    try:
+        return llm.work_match(company, designation, profile_text)
+    except Exception as e:  # noqa: BLE001 — no check is never a pass
+        return {"verdict": "unsure", "company": None, "designation": None,
+                "reason": f"Company/designation check failed: {str(e)[:120]}"}
+
+
+def _guard_note(lead: dict, g: dict) -> str:
+    company, designation = stated_work(lead)
+    said = " / ".join(x for x in (designation, company) if x)
+    if g["verdict"] == "mismatch":
+        return (f"Guardrail: this LinkedIn doesn't show the company/designation the lead gave "
+                f"({said}), so it isn't theirs. {g.get('reason') or ''} ")
+    if g["verdict"] == "unsure":
+        return (f"Guardrail: couldn't confirm this LinkedIn shows the lead's company/designation "
+                f"({said}); needs a person. {g.get('reason') or ''} ")
+    return ""
 
 
 def same_person(lead: dict, raw: dict) -> dict:
@@ -318,7 +351,8 @@ def process_lead(lead_id: int, recheck: bool = False) -> None:
             seen.add(provided.rstrip("/").lower())
             li_ordered.append({"url": provided, "title": "LinkedIn URL typed in by the lead",
                                "snippet": "", "raw_content": _format_profile(provided_raw),
-                               "_source": "apify_search"})     # already scraped: reuse it
+                               "_source": "apify_search",      # already scraped: reuse it
+                               "_typed": True})                # the lead's own link: no guard
         elif provided:                                 # typed in, but no such profile or someone else's
             seen.add(provided.rstrip("/").lower())
         for r in lane_li + gen_li:
@@ -345,6 +379,13 @@ def process_lead(lead_id: int, recheck: bool = False) -> None:
             match = llm.match_candidate(extracted, res, content,
                                         trusted_note=res.get("_matched_note", ""))
             person = match.get("person", {}) if isinstance(match, dict) else {}
+            # GUARDRAIL: a LinkedIn profile found by search (not typed in by the
+            # lead) only counts if it shows the company AND designation the lead
+            # gave. A mismatch can't be chosen; an unsure one can't be accepted.
+            guard = None
+            if res["source_type"] == "linkedin" and not res.get("_typed"):
+                guard = work_guard(lead, content or res.get("snippet", ""))
+            note = _guard_note(lead, guard) if guard else ""
             candidates.append(
                 {
                     "url": _canon(res["url"]),
@@ -353,7 +394,8 @@ def process_lead(lead_id: int, recheck: bool = False) -> None:
                     "source_type": res["source_type"],
                     "content_source": content_src,
                     "score": match.get("score", 0.0),
-                    "reasoning": match.get("reasoning", ""),
+                    "reasoning": note + match.get("reasoning", ""),
+                    "guard": guard,
                     "signals": {
                         "name": match.get("name_match"),
                         "company": match.get("company_match"),
@@ -368,7 +410,9 @@ def process_lead(lead_id: int, recheck: bool = False) -> None:
 
         # Display order: highest match score first (best match on top). The
         # decision below still applies LinkedIn priority when choosing the profile.
-        candidates.sort(key=lambda c: c.get("score", 0.0) or 0.0, reverse=True)
+        # Profiles the guardrail ruled out go last, so none shows as the top match.
+        candidates.sort(key=lambda c: ((c.get("guard") or {}).get("verdict") != "mismatch",
+                                       c.get("score", 0.0) or 0.0), reverse=True)
 
         # Step 8 — decide (LinkedIn-priority logic; returns the chosen profile)
         status, confidence, reasoning, chosen = decide(candidates)

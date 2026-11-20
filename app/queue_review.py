@@ -97,6 +97,7 @@ def _brief(lead: dict) -> str:
         f"  email: {lead.get('email') or ''}",
         f"  phone: {lead.get('phone') or ''}",
         f"  company: {lead.get('company') or ''}",
+        f"  designation: {lead.get('designation') or ''}",
         f"  visa: {lead.get('visa') or ''}",
         f"  message: {(lead.get('message') or '')[:800]}",
         f"  what they put in the LinkedIn field: {lead.get('link_raw') or '(blank)'}",
