@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import db, sheets
 from .pipeline import orchestrator
-from .pipeline.linkedin import canonical_linkedin, fetch_linkedin_raw
+from .pipeline.linkedin import _format_profile, canonical_linkedin, fetch_linkedin_raw
 
 _lock = threading.Lock()
 
@@ -58,16 +58,32 @@ def _lead_ctx(lead: dict | None, r: list, cell) -> dict:
             "visa": cell(r, "visa intrested in"), "message": cell(r, "message")[:1500]}
 
 
-def _check(url: str, lead: dict) -> dict:
+def _found_by_search(url: str, lead: dict | None) -> bool:
+    """The link came from our search, not from the lead (who typed none, or
+    another one): only then does the company/designation guardrail apply."""
+    if not lead:
+        return False
+    typed = canonical_linkedin((lead.get("linkedin") or "").strip())
+    return typed != canonical_linkedin(url)
+
+
+def _check(url: str, ctx: dict, lead: dict | None = None) -> dict:
     """Open one link and judge it. verdict: good | bad | unsure; why: dead |
-    other_person | unsure. The page must open (Apify); identity is
-    orchestrator.same_person."""
+    other_person | wrong_work | unsure. The page must open (Apify); identity is
+    orchestrator.same_person, and a link found by search must also show the
+    company and designation the lead gave (orchestrator.work_guard)."""
     raw = fetch_linkedin_raw(canonical_linkedin(url))
     if not raw:
         return {"verdict": "bad", "why": "dead"}
     who = f"{raw.get('firstName', '')} {raw.get('lastName', '')}".strip()
-    j = orchestrator.same_person(lead, raw)
+    j = orchestrator.same_person(ctx, raw)
     out = {"who": who, "via": j["via"], "reason": j["reason"], "confidence": j["confidence"]}
+    if j["same"] is not False and _found_by_search(url, lead):
+        g = orchestrator.work_guard(lead, _format_profile(raw))
+        if g and g["verdict"] == "mismatch":
+            return {**out, "verdict": "bad", "why": "wrong_work", "reason": g["reason"]}
+        if g and g["verdict"] == "unsure":
+            return {**out, "verdict": "unsure", "why": "unsure", "reason": g["reason"]}
     if j["same"] is True:
         return {**out, "verdict": "good"}
     if j["same"] is False:
@@ -112,7 +128,8 @@ def run(only_new: bool = False, sync=None) -> dict:
                 todo.append((n, r, url, key))
 
         with ThreadPoolExecutor(4) as ex:
-            verdicts = list(ex.map(lambda t: _check(t[2], _lead_ctx(lead_of(t[3]), t[1], cell)), todo))
+            verdicts = list(ex.map(lambda t: _check(t[2], _lead_ctx(lead_of(t[3]), t[1], cell),
+                                                    lead_of(t[3])), todo))
         rep["checked"] = len(todo)
 
         fixes = []                                   # sheet cells the sync won't rewrite

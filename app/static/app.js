@@ -806,7 +806,7 @@ $("#gtmRecount").addEventListener("click", async () => {
 gtmLoad();
 
 // ── LinkedIn check ──────────────────────────────────────────────────────────
-const _LI_WHY = { dead: "Page doesn't open", other_person: "Someone else's profile", unsure: "Maybe not the same person" };
+const _LI_WHY = { dead: "Page doesn't open", other_person: "Someone else's profile", wrong_work: "Different company / designation from the lead's",unsure: "Maybe not the same person" };
 const _liLink = (u) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?linkedin\.com/, ""))}</a>` : `<span class="subtle">cleared</span>`;
 let _liTimer = null;
 function liRender(d) {

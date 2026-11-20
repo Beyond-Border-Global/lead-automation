@@ -46,6 +46,8 @@ def _startup() -> None:
             db.meta_set("start_after_result", json.dumps({"error": str(e)[:200]}))
     if db.meta_get("heard_backfill_v1") != "1" and config.GOOGLE_SOURCE_SHEET_ID:
         threading.Thread(target=_backfill_heard_about, daemon=True).start()
+    if db.meta_get("designation_backfill_v1") != "1" and config.GOOGLE_SOURCE_SHEET_ID:
+        threading.Thread(target=_backfill_designation, daemon=True).start()
     if db.meta_get("visa_fix_done") != "1" and config.GOOGLE_SOURCE_SHEET_ID:
         threading.Thread(target=_fix_old_visas, daemon=True).start()
     _fix_lead_dates()
@@ -148,6 +150,49 @@ def _backfill_heard_about() -> None:
         db.meta_set("heard_backfill_v1", "1")
     except Exception as e:  # noqa: BLE001 — retried on next start
         db.meta_set("heard_backfill_result", json.dumps({"error": str(e)[:200]}))
+
+
+def _backfill_designation() -> None:
+    """One-time: leads pulled before the designation was stored get it (and the
+    company, if missing) from their source-sheet row (same channel + email /
+    phone / name), so re-checking them applies the LinkedIn guardrail."""
+    try:
+        typed: dict[str, tuple[str, str]] = {}
+        for title, rows in sheets.read_source_tabs():
+            rows = [r for r in rows if any((c or "").strip() for c in r)]
+            if not rows:
+                continue
+            try:
+                mapping = _sheet_mapping(rows, title)
+            except sheets.SheetsError:
+                continue                                  # not a lead tab
+            if not (_indices(mapping, "designation") or _indices(mapping, "company")):
+                continue
+            ch = _channel_from_tab(title).lower()
+            for r in rows[1:]:
+                val = lambda k, _r=r: " ".join(_r[i].strip() for i in _indices(mapping, k)
+                                               if 0 <= i < len(_r) and _r[i].strip())
+                key, _ = _dedup_keys(val("name"), val("email"), val("phone"))
+                if key and (val("designation") or val("company")):
+                    typed[f"{ch}|{key}"] = (val("company"), val("designation"))   # newest row wins
+        n = 0
+        for l in db.list_leads():
+            if l.get("origin") != "sheet":
+                continue
+            key, _ = _dedup_keys(l.get("name", ""), l.get("email", ""), l.get("phone", ""))
+            company, designation = typed.get(f"{(l.get('channel') or '').lower()}|{key}", ("", ""))
+            fields = {}
+            if designation and not (l.get("designation") or "").strip():
+                fields["designation"] = designation
+            if company and not (l.get("company") or "").strip():
+                fields["company"] = company
+            if fields:
+                db.update_lead(l["id"], **fields)
+                n += 1
+        db.meta_set("designation_backfill_result", json.dumps({"filled": n}))
+        db.meta_set("designation_backfill_v1", "1")
+    except Exception as e:  # noqa: BLE001 — retried on next start
+        db.meta_set("designation_backfill_result", json.dumps({"error": str(e)[:200]}))
 
 
 def _fix_lead_dates() -> None:
@@ -584,7 +629,7 @@ def _insert_row(val, channel: str = "", link: str = "", origin: str = "") -> boo
         linkedin=info["linkedin_url"], li_optout=1 if info["optout"] else 0,
         other_link=canonical_url(info["other_url"]) or info["other_url"],
         link_raw=raw_link, visa=normalize_visa(val("visa")), lead_date=(gtm.clean_lead_date(val("date"), dt.date.today()) if origin == "sheet" else val("date")),
-        heard_about=val("heard_about"),
+        heard_about=val("heard_about"), designation=val("designation"),
         # Pulled from a source tab: the tab IS the channel (a column like "Where
         # have you heard about us" must never override it). Uploads: the row's
         # channel/source column if present, else "Not provided".
@@ -685,7 +730,11 @@ _HEADER_FIELDS = {
     "visa": ["visa intrested in", "visa interested in", "visa type", "visa", "visa interest"],
     "message": ["message", "notes", "comments", "comment"],
     "date": ["date of lead", "date od lead", "timestamp", "date", "created", "created at"],
-    "company": ["company name", "company"],
+    "company": ["company name", "company", "company_name", "current company", "employer"],
+    # The job title the lead typed in (Meta forms ask for it). The LinkedIn
+    # guardrail needs it: a profile found by search must show this title.
+    "designation": ["designation", "job title", "job_title", "jobtitle", "current designation",
+                    "your designation", "position", "current position", "role", "current role"],
     "channel": ["channel", "source", "lead source"],
     "heard_about": ["where have you heard about us", "where did you hear about us",
                     "how did you hear about us", "heard about us", "where have you heard about us?"],
